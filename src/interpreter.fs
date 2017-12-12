@@ -1,15 +1,42 @@
+VARIABLE idx
+: IDX@ idx @ ;
+: IDX! idx ! ;
+: IDX0 0 IDX! ;
+: IDX+ IDX@ 1+ IDX! ;
+
 VARIABLE look
 : LOOK@ look c@ ;
 
-CREATE name
-name 32 chars allot 
-
 VARIABLE namelen
+0 namelen !
+: NAMELEN@ namelen @ ;
+: NAMELEN! namelen ! ;
+: NAMELEN+ NAMELEN@ 1+ NAMELEN! ;
+: RESETNAMELEN 0 NAMELEN! ;
 
 VARIABLE num
-num 32 chars allot
+: NUM@ num @ ;
+: NUM? num ? ;
+: NUM! num ! ;
+: RESETNUM 0 NUM! ;
 
-VARIABLE numlen
+VARIABLE nxt
+0 nxt !
+: NXT@ nxt @ ;
+: NXT! nxt ! ;
+: NXT+ NXT@ 1+ NXT! ;
+
+CREATE name
+name 32 chars allot
+: NAME@ name NAMELEN@ ;
+
+CREATE names
+names 64 cells allot
+: NAMES@ names IDX@ CELLS + 2@ ;
+
+CREATE nums
+nums 64 cells allot
+: NUMS@ nums IDX@ CELLS + @ ;
 
 \ ---------------- BEGIN LICENSE ----------------
 \
@@ -49,10 +76,10 @@ VARIABLE numlen
 
 : ISWHITESPACE LOOK@ 32 = LOOK@ 9 = OR ;
 
-: GETCHAR KEY look c! ;
+: GETCHAR KEY DUP look c! EMIT ;
 
-: SKIPWHITESPACE 
-    BEGIN 
+: SKIPWHITESPACE
+    BEGIN
         ISWHITESPACE WHILE
         GETCHAR
     REPEAT ;
@@ -66,87 +93,100 @@ VARIABLE numlen
     ELSE >R ERROR R> EMIT EXPECTED
     ENDIF ;
 
-: NEWNAME 0 namelen c! ;
-
-: NAMELEN@ namelen c@ ;
-
-: ADDCHAR 
+: ADDCHAR
     LOOK@ TOUPPER name NAMELEN@ chars + c!
-    NAMELEN@ 1+ namelen c! ;
+    NAMELEN+ ;
 
 : GETNAME
+    SKIPWHITESPACE
     ISALPHA
     IF
-        NEWNAME
-        BEGIN 
-            ISALNUM WHILE 
+        RESETNAMELEN
+        BEGIN
+            ISALNUM WHILE
             ADDCHAR
             GETCHAR
+            SKIPWHITESPACE
         REPEAT
     ELSE ERROR ." Name" EXPECTED
-    THEN SKIPWHITESPACE name ;
-
-: NEWNUM 0 numlen c! ;
-
-: NUMLEN@ numlen c@ ;
-
-: ADDNUM 
-    LOOK@ num NUMLEN@ chars + c!
-    NUMLEN@ 1+ numlen c! ;
+    THEN SKIPWHITESPACE ;
 
 : GETNUM
     ISDIGIT
     IF
-        NEWNUM
+        RESETNUM
         BEGIN
             ISDIGIT WHILE
-            ADDNUM
+            10 NUM@ * LOOK@ '0' - + NUM!
             GETCHAR
         REPEAT
     ELSE ERROR ." Number" EXPECTED
-    THEN SKIPWHITESPACE num ;
+    ENDIF ;
 
 : INIT CR GETCHAR SKIPWHITESPACE ;
 
-: IDENT
-    GETNAME 2>R 
-    LOOK@ '(' = 
-    IF 
-        '(' MATCH
-        ')' MATCH
-        ." BSR " 2R> TYPE CR
-    ELSE 
-        ." MOVE " 2R> TYPE ." (PC),D0" CR
+\ Table
+
+: LOOKUPCOND NAME@ NAMES@ COMPARE 0 <> ;
+
+: LOOKUP
+    IDX0
+    BEGIN
+        LOOKUPCOND WHILE
+        IDX+
+    REPEAT
+    LOOKUPCOND
+    IF ERROR ." Variable name" EXPECTED
+    ELSE NUMS@ NUM!
     ENDIF ;
+
+: INSERT
+    IDX0
+    BEGIN
+        IDX@ NXT@ < IF LOOKUPCOND ELSE 0 ENDIF WHILE
+        IDX+
+    REPEAT
+    IDX@ NXT@ <
+    IF
+        NAME@ names IDX@ CELLS + 2!
+        NUM@ nums IDX@ CELLS + !
+    ELSE
+        NAME@ names NXT@ CELLS + 2!
+        NUM@ nums NXT@ CELLS + !
+        NXT+
+    ENDIF ;
+
+\ Factor
 
 DEFER express
 
 : FACTOR
     LOOK@ '(' =
-    IF  
+    IF
         '(' MATCH
         express
-        ')' MATCH    
-    ELSE ISALPHA
-        IF IDENT
-        ELSE GETNUM >R ." MOVE #" R> NAMELEN@ TYPE ." ,D0" CR
+        ')' MATCH
+    ELSE
+        ISALPHA
+        IF GETNAME LOOKUP
+        ELSE GETNUM
         ENDIF
     ENDIF ;
 
-: MUL 
+: MUL
     '*' MATCH
-    FACTOR 
-    ." MULS (SP)+,D0" CR ;
+    NUM@ >R
+    FACTOR
+    R> NUM@ * NUM! ;
 
-: DIV 
+: DIV
     '/' MATCH
-    FACTOR 
-    ." MOVE (SP)+,D1" CR
-    ." DIVS D1,D0" CR ;
+    NUM@ >R
+    FACTOR
+    R> NUM@ / NUM! ;
 
-: MULOP 
-    ." MOVE D0,-(SP)" CR
-    LOOK@ CASE 
+: MULOP
+    LOOK@ CASE
         '*' OF MUL ENDOF
         '/' OF DIV ENDOF
         ERROR ." Mul/Div" EXPECTED ENDOF
@@ -154,27 +194,29 @@ DEFER express
 
 : ISMULOP LOOK@ '*' = LOOK@ '/' = OR ;
 
-: TERM 
+\ Term
+
+: TERM
     FACTOR
-    BEGIN 
+    BEGIN
         ISMULOP WHILE
         MULOP
     REPEAT ;
 
 : ADD
     '+' MATCH
+    NUM@ >R
     TERM
-    ." ADD (SP)+,D0" CR ;
+    R> NUM@ + NUM! ;
 
 : SUB
     '-' MATCH
+    NUM@ >R
     TERM
-    ." SUB (SP)+,D0" CR 
-    ." NEG DO" ;
+    R> NUM@ - NUM! ;
 
-: ADDOP 
-    ." MOVE D0,-(SP)" CR
-    LOOK@ CASE 
+: ADDOP
+    LOOK@ CASE
         '+' OF ADD ENDOF
         '-' OF SUB ENDOF
         ERROR ." Add/Sub" EXPECTED ENDOF
@@ -183,8 +225,8 @@ DEFER express
 : ISADDOP LOOK@ '+' = LOOK@ '-' = OR ;
 
 : EXPRESSION
-    ISADDOP 
-    IF ." CLR D0" CR
+    ISADDOP
+    IF RESETNUM
     ELSE TERM
     THEN
         BEGIN
@@ -194,16 +236,40 @@ DEFER express
 
 ' EXPRESSION IS express
 
+: NEWLINE
+    13 LOOK@ =
+    IF
+        GETCHAR
+        10 LOOK@ =
+        IF GETCHAR
+        ENDIF
+    ENDIF ;
+
 : ASSIGNMENT
-    GETNAME >R
+    GETNAME
     '=' MATCH
     EXPRESSION
-    ." LEA " R> NAMELEN@ TYPE ." (PC),A0" CR
-    ." MOVE D0,(A0)" CR ;
+    NUM@ EMIT
+    INSERT ;
 
-: MAIN
+: INPUT
+    '?' MATCH
+    GETNAME
+    INSERT ;
+
+: OUTPUT
+    '!' MATCH
+    GETNAME
+    LOOKUP
+    NUM? ;
+
+: INTERPRETER
     INIT
-    ASSIGNMENT 
-    LOOK@ 13 <>
-    IF ERROR ." Newline" EXPECTED
-    ENDIF ;
+    BEGIN
+        LOOK@ CASE
+            '?' OF INPUT ENDOF
+            '!' OF OUTPUT ENDOF
+            ASSIGNMENT ENDOF
+        ENDCASE
+        NEWLINE
+    '.' LOOK@ = UNTIL ;
